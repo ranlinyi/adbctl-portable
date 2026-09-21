@@ -30,8 +30,8 @@ cd "$ROOT"
 mkdir -p .build
 JSON="$ROOT/.build/publish.json"
 
-get_id()    { grep -o '"id"[[:space:]]*:[[:space:]]*[0-9][0-9]*' | head -1 | grep -o '[0-9][0-9]*$'; }
-get_login() { grep -o '"login"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; }
+get_id()    { grep -o '"id"[[:space:]]*:[[:space:]]*[0-9][0-9]*' | head -1 | grep -o '[0-9][0-9]*$' || true; }
+get_login() { grep -o '"login"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true; }
 
 echo "== 0/5 校验 token =="
 ME="$(curl -fsS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$API/user")" \
@@ -47,6 +47,7 @@ if [ "$code" = "200" ]; then
 else
   curl -fsS -o "$JSON" -X POST \
     -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+    -H "Content-Type: application/json" \
     "$API/user/repos" \
     -d "{\"name\":\"$REPO\",\"private\":false,\"description\":\"adbctl 自包含单文件版：内嵌 adb + scrcpy，支持 Windows/Linux\"}"
   echo "仓库已创建"
@@ -55,7 +56,9 @@ fi
 echo "== 2/5 推送 main =="
 git remote remove origin 2>/dev/null || true
 git remote add origin "https://github.com/$OWNER/$REPO.git"
-git -c credential.helper='!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f' push -u origin main
+git -c credential.helper= \
+  -c credential.helper='!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f' \
+  push -u origin main
 
 echo "== 3/5 创建或复用 Release $TAG =="
 REL="$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
@@ -64,6 +67,7 @@ REL_ID="$(printf '%s' "$REL" | get_id)"
 if [ -z "$REL_ID" ]; then
   REL="$(curl -fsS -X POST \
     -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+    -H "Content-Type: application/json" \
     "$API/repos/$OWNER/$REPO/releases" \
     -d "{\"tag_name\":\"$TAG\",\"name\":\"$TITLE\",\"draft\":false}")"
   REL_ID="$(printf '%s' "$REL" | get_id)"
