@@ -1,8 +1,10 @@
 // adbctl — Android 设备一键连接 / 投屏：有 USB 走 USB，没有才走无线调试。
 //
-// 这是原 bash 脚本 adbctl 的跨平台单文件实现：把 adb、scrcpy 以及 scrcpy-server
-// 全部内嵌进本可执行文件，首次运行时释放到用户缓存目录，之后直接复用。
-// Windows 与 Linux 各一个自包含可执行文件，不需要预装 adb / scrcpy / bash。
+// 有两种构建：
+//  1. 内嵌单文件版（默认）：把 adb、scrcpy、scrcpy-server 全部内嵌进可执行文件，
+//     首次运行释放到用户缓存目录，开箱即用，不需要预装任何东西；
+//  2. 省空间部署版（-tags lite，仅 Linux）：可执行文件本身很小，启动时扫描系统与
+//     缓存里有没有 adb / scrcpy，缺哪个就从官方源下载（校验 SHA256）部署到用户缓存。
 package main
 
 import (
@@ -26,6 +28,9 @@ const appVersion = "1.0.0"
 
 const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=12M --max-size=1200 --max-fps=52 --video-buffer=0"
 
+// 省空间部署版按需下载的 scrcpy 版本（与 build.sh 保持一致）
+const scrcpyVersion = "4.1"
+
 const (
 	connSvc = "_adb-tls-connect._tcp"
 	pairSvc = "_adb-tls-pairing._tcp"
@@ -34,7 +39,7 @@ const (
 var ipPortRe = regexp.MustCompile("([0-9]{1,3}\\.){3}[0-9]{1,3}:[0-9]{1,5}")
 
 var usageText = strings.Join([]string{
-	"adbctl — Android 设备一键连接 / 投屏（自包含单文件版）",
+	"adbctl — Android 设备一键连接 / 投屏（内嵌单文件版 / 省空间部署版）",
 	"",
 	"  adbctl               # 自动选路：有 USB 就用 USB，否则连无线。stdout 只输出选中的序列号/地址",
 	"  adbctl -S            # 连上后启动 scrcpy（参数见下方 SCRCPY_ARGS）",
@@ -49,7 +54,8 @@ var usageText = strings.Join([]string{
 	"  adbctl -w 30         # 最多等 30 秒等 mDNS 广播出现（默认 0 = 只查一次）",
 	"  adbctl -h            # 帮助",
 	"  adbctl --version     # 版本",
-	"  adbctl --print-paths # 打印内嵌 adb / scrcpy 释放后的路径",
+	"  adbctl --print-paths # 打印最终使用的 adb / scrcpy / server 路径",
+	"  adbctl --check-deps  # 扫描依赖是否存在（省空间版；只扫描不下载，别名 --scan）",
 	"",
 	"这个程序会执行什么（副作用全部明列，只有这几条）:",
 	"  * adb devices -l                    查询式，只读（判断有没有 USB）",
@@ -61,7 +67,7 @@ var usageText = strings.Join([]string{
 	"  * scrcpy -s <目标> [--new-display --start-app=<包名>] $SCRCPY_ARGS",
 	"                                      仅当给了 -S / -a",
 	"  不写任何文件到当前目录；不用 sudo；不扫端口；除 adb 自身的连接外不联网。",
-	"  （唯一写入：首次运行时把内嵌的 adb/scrcpy 释放到用户缓存目录）",
+	"  （唯一写入：内嵌版首次运行释放依赖；省空间版缺依赖时下载到用户缓存）",
 	"",
 	"选路优先级:",
 	"  -p / -l / -W  -> 无线",
@@ -70,11 +76,13 @@ var usageText = strings.Join([]string{
 	"  USB 判定依据：adb devices -l 中 state=device 且带 \" usb:\" 标记的那一行",
 	"",
 	"环境变量:",
-	"  ADB          指定 adb（默认用内嵌的 adb）",
-	"  SCRCPY       指定 scrcpy（默认用内嵌的 scrcpy）",
-	"  PAIR_IP      指定取配对地址的命令（默认自己解析 mDNS）",
-	"  SCRCPY_ARGS  覆盖 -S 时的 scrcpy 启动参数（默认见下）",
-	"  ADBCTL_CACHE 指定内嵌依赖释放目录（默认用户缓存目录）",
+	"  ADB                    指定 adb（默认用内嵌/系统的 adb）",
+	"  SCRCPY                 指定 scrcpy（默认用内嵌/系统的 scrcpy）",
+	"  PAIR_IP                指定取配对地址的命令（默认自己解析 mDNS）",
+	"  SCRCPY_ARGS            覆盖 -S 时的 scrcpy 启动参数（默认见下）",
+	"  ADBCTL_CACHE           依赖释放 / 部署目录（默认用户缓存目录）",
+	"  ADBCTL_SCRCPY_URL      省空间版：scrcpy 包下载地址（可换镜像/本地文件）",
+	"  ADBCTL_SCRCPY_SUMS_URL 省空间版：SHA256 清单地址",
 	"",
 	"scrcpy 默认档（2026-09-21 实测于 Redmi K70 / 540x1200 / H.265）:",
 	"  " + scrcpyArgsDefault,
@@ -87,12 +95,29 @@ var usageText = strings.Join([]string{
 }, "\n")
 
 var (
-	payloadRoot string
-	adbPath     string
-	scrcpyPath  string
-	serverPath  string
-	childEnv    []string
+	payloadRoot   string
+	payloadBinDir string
+	adbPath       string
+	scrcpyPath    string
+	serverPath    string
+	childEnv      []string
 )
+
+// depsReport 记录 --check-deps 扫描到的依赖来源（仅 lite 版会填充）。
+type depsReport struct {
+	sysAdb      string
+	sysScrcpy   string
+	cacheAdb    string
+	cacheScrcpy string
+	cacheRoot   string
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "（未找到）"
+	}
+	return s
+}
 
 func main() {
 	os.Exit(run())
@@ -148,6 +173,32 @@ func run() int {
 				return 1
 			}
 			fmt.Printf("adb=%s\nscrcpy=%s\nserver=%s\nroot=%s\n", adbPath, scrcpyPath, serverPath, payloadRoot)
+			return 0
+		case "--check-deps", "--scan":
+			if len(embeddedPayload) > 0 {
+				if err := setup(); err != nil {
+					fmt.Fprintf(os.Stderr, "adbctl: %v\n", err)
+					return 1
+				}
+				fmt.Println("模式：内嵌单文件版（依赖已内嵌，无需扫描/下载）")
+				fmt.Printf("adb=%s\nscrcpy=%s\nserver=%s\n", adbPath, scrcpyPath, serverPath)
+				return 0
+			}
+			rep := scanDeps()
+			fmt.Println("模式：省空间部署版（按需下载，仅 Linux）")
+			fmt.Printf("缓存目录：     %s\n", rep.cacheRoot)
+			fmt.Printf("系统 adb：     %s\n", orNone(rep.sysAdb))
+			fmt.Printf("系统 scrcpy：  %s\n", orNone(rep.sysScrcpy))
+			fmt.Printf("已部署 adb：   %s\n", orNone(rep.cacheAdb))
+			fmt.Printf("已部署 scrcpy：%s\n", orNone(rep.cacheScrcpy))
+			switch {
+			case rep.cacheAdb != "" && rep.cacheScrcpy != "":
+				fmt.Println("结论：使用缓存里已部署的依赖，无需下载。")
+			case rep.sysAdb != "" && rep.sysScrcpy != "":
+				fmt.Println("结论：系统已有 adb 与 scrcpy，直接使用，无需下载。")
+			default:
+				fmt.Printf("结论：缺少依赖，运行时会自动下载官方 scrcpy v%s（约 18MB）到缓存。\n", scrcpyVersion)
+			}
 			return 0
 		default:
 			fmt.Fprintf(os.Stderr, "adbctl: 未知参数 '%s'（-h 看用法）\n", args[i])
@@ -261,22 +312,28 @@ func takeValue(args []string, i *int) string {
 // ---------------- 内嵌依赖释放 ----------------
 
 func setup() error {
-	root, err := ensurePayload()
-	if err != nil {
-		return err
+	if len(embeddedPayload) > 0 {
+		root, err := ensurePayload()
+		if err != nil {
+			return err
+		}
+		payloadRoot = root
+		payloadBinDir = filepath.Join(root, "bin")
+		adbPath = filepath.Join(payloadBinDir, exeName("adb"))
+		scrcpyPath = filepath.Join(payloadBinDir, exeName("scrcpy"))
+		serverPath = filepath.Join(payloadBinDir, "scrcpy-server")
+	} else {
+		if err := resolveExternal(); err != nil {
+			return err
+		}
 	}
-	payloadRoot = root
-	binDir := filepath.Join(root, "bin")
-	adbPath = filepath.Join(binDir, exeName("adb"))
-	scrcpyPath = filepath.Join(binDir, exeName("scrcpy"))
-	serverPath = filepath.Join(binDir, "scrcpy-server")
 	if v := os.Getenv("ADB"); v != "" {
 		adbPath = v
 	}
 	if v := os.Getenv("SCRCPY"); v != "" {
 		scrcpyPath = v
 	}
-	childEnv = buildEnv(binDir)
+	childEnv = buildEnv(payloadBinDir)
 	return nil
 }
 
@@ -376,13 +433,20 @@ func extractZip(data []byte, dest string) error {
 
 func buildEnv(binDir string) []string {
 	env := os.Environ()
-	env = prependPath(env, "PATH", binDir)
-	libDir := filepath.Join(payloadRoot, "lib")
-	if st, err := os.Stat(libDir); err == nil && st.IsDir() {
-		env = prependPath(env, "LD_LIBRARY_PATH", libDir)
+	if binDir != "" {
+		env = prependPath(env, "PATH", binDir)
 	}
-	if os.Getenv("SCRCPY_SERVER_PATH") == "" {
-		env = setEnv(env, "SCRCPY_SERVER_PATH", serverPath)
+	if payloadRoot != "" {
+		libDir := filepath.Join(payloadRoot, "lib")
+		if st, err := os.Stat(libDir); err == nil && st.IsDir() {
+			env = prependPath(env, "LD_LIBRARY_PATH", libDir)
+		}
+	}
+	// 只有确实存在 scrcpy-server 时才设置，避免污染系统 scrcpy 的查找
+	if serverPath != "" && os.Getenv("SCRCPY_SERVER_PATH") == "" {
+		if _, err := os.Stat(serverPath); err == nil {
+			env = setEnv(env, "SCRCPY_SERVER_PATH", serverPath)
+		}
 	}
 	return env
 }

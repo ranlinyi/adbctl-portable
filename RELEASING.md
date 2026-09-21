@@ -1,12 +1,13 @@
 # 发布到 GitHub（Releasing）
 
-本仓库源码直接推送；**单文件便携版二进制不随 git 提交**（在 `.gitignore` 中排除），
+本仓库源码直接推送；**二进制不随 git 提交**（在 `.gitignore` 中排除），
 而是作为 **Release 资源**单独上传。
 
 已经构建好的二进制在：
 
-- `dist/adbctl-linux-x86_64`
-- `dist/adbctl-windows-x86_64.exe`
+- `dist/adbctl-linux-x86_64`（Linux 内嵌单文件版）
+- `dist/adbctl-linux-x86_64-lite`（Linux 省空间部署版）
+- `dist/adbctl-windows-x86_64.exe`（Windows 内嵌单文件版）
 - `dist/SHA256SUMS`
 
 ---
@@ -37,8 +38,10 @@ GITHUB_TOKEN=ghp_xxx ./publish.sh
 1. 校验令牌；
 2. 创建仓库 `ranlinyi/adbctl-portable`（已存在就复用）；
 3. 把 `main` 分支推上去；
-4. 创建 `v1.0.0` 的 Release；
-5. 上传 `adbctl-linux-x86_64`、`adbctl-windows-x86_64.exe`、`SHA256SUMS`。
+4. 创建 `v1.0.0` 的 Release（已存在就复用）；
+5. 上传/更新四个文件：`adbctl-linux-x86_64`、`adbctl-linux-x86_64-lite`、
+   `adbctl-windows-x86_64.exe`、`SHA256SUMS`。同名旧资源会先删除再上传，
+   所以脚本可以重复运行。
 
 成功后终端会打印仓库和 Release 网址。
 
@@ -64,8 +67,8 @@ git push -u origin main
 ### 2.2 网页发 Release（零依赖）
 
 1. 打开 `https://github.com/ranlinyi/adbctl-portable/releases/new`
-2. Tag 填 `v1.0.0`，标题填 `adbctl 1.0.0（自包含单文件便携版）`
-3. 把 `dist/` 里的三个文件拖进「Attach binaries」区域
+2. Tag 填 `v1.0.0`，标题填 `adbctl 1.0.0（自包含单文件 + 省空间部署版）`
+3. 把 `dist/` 里的四个文件拖进「Attach binaries」区域
 4. 点 **Publish release**
 
 ### 2.3 用 `gh` CLI
@@ -74,9 +77,10 @@ git push -u origin main
 gh auth login
 gh release create v1.0.0 \
   dist/adbctl-linux-x86_64 \
+  dist/adbctl-linux-x86_64-lite \
   dist/adbctl-windows-x86_64.exe \
   dist/SHA256SUMS \
-  --title "adbctl 1.0.0（自包含单文件便携版）"
+  --title "adbctl 1.0.0（自包含单文件 + 省空间部署版）"
 ```
 
 ---

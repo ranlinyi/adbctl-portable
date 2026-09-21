@@ -2,8 +2,9 @@
 # 构建 adbctl 自包含单文件二进制（Linux x86_64 / Windows x86_64）
 #
 # 产物：
-#   dist/adbctl-linux-x86_64
-#   dist/adbctl-windows-x86_64.exe
+#   dist/adbctl-linux-x86_64          内嵌单文件版（Linux）
+#   dist/adbctl-windows-x86_64.exe    内嵌单文件版（Windows）
+#   dist/adbctl-linux-x86_64-lite     省空间部署版（Linux，按需下载依赖）
 #
 # 依赖：go(1.22+)、curl、tar、unzip、sha256sum
 set -euo pipefail
@@ -83,12 +84,14 @@ go run ./tools/mkzip "$BUILD/windows" "$PAYLOAD/adbctl-payload-windows-amd64.zip
 echo "== 5/5 交叉编译 =="
 CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$DIST/adbctl-linux-x86_64" .
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$DIST/adbctl-windows-x86_64.exe" .
+# 省空间部署版（仅 Linux）：不内嵌依赖，运行时扫描并按需下载到用户缓存
+CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -tags lite -trimpath -ldflags "-s -w" -o "$DIST/adbctl-linux-x86_64-lite" .
 
 echo
 echo "构建完成："
 ls -la "$DIST"
 (
   cd "$DIST"
-  sha256sum adbctl-linux-x86_64 adbctl-windows-x86_64.exe > SHA256SUMS
+  sha256sum adbctl-linux-x86_64 adbctl-windows-x86_64.exe adbctl-linux-x86_64-lite > SHA256SUMS
   cat SHA256SUMS
 )

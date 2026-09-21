@@ -32,6 +32,8 @@ JSON="$ROOT/.build/publish.json"
 
 get_id()    { grep -o '"id"[[:space:]]*:[[:space:]]*[0-9][0-9]*' | head -1 | grep -o '[0-9][0-9]*$' || true; }
 get_login() { grep -o '"login"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true; }
+# 从 release assets JSON 里按文件名取 asset id（GitHub 返回的是美化后的 JSON）
+asset_id() { printf '%s' "$1" | grep -B3 -F "\"name\": \"$2\"," | grep -o '"id": [0-9][0-9]*' | tail -1 | grep -o '[0-9][0-9]*' || true; }
 
 echo "== 0/5 校验 token =="
 ME="$(curl -fsS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$API/user")" \
@@ -77,13 +79,24 @@ else
 fi
 
 echo "== 4/5 上传便携版二进制 =="
-for f in dist/adbctl-linux-x86_64 dist/adbctl-windows-x86_64.exe dist/SHA256SUMS; do
+EXISTING="$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+  "$API/repos/$OWNER/$REPO/releases/$REL_ID/assets")"
+for f in dist/adbctl-linux-x86_64 dist/adbctl-windows-x86_64.exe dist/adbctl-linux-x86_64-lite dist/SHA256SUMS; do
   if [ ! -f "$f" ]; then
     echo "缺少 $f，请先运行 ./build.sh" >&2
     exit 1
   fi
   name="$(basename "$f")"
-  echo "  上传 $name ..."
+  aid="$(asset_id "$EXISTING" "$name")"
+  if [ -n "$aid" ]; then
+    echo "  更新 $name（先删除旧资源 $aid）"
+    curl -fsS -X DELETE \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H "Accept: application/vnd.github+json" \
+      "$API/repos/$OWNER/$REPO/releases/assets/$aid" >/dev/null
+  else
+    echo "  上传 $name ..."
+  fi
   curl -fsS -X POST \
     -H "Authorization: Bearer $GITHUB_TOKEN" \
     -H "Accept: application/vnd.github+json" \
