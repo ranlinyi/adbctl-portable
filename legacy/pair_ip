@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# pair_ip — 从 adb 的 mDNS 广播中取出 Android 无线调试地址，免去在手机上肉眼找 IP/端口
+#
+#   adb pair "$(pair_ip)" 123456     # 配对：地址自动找，6 位配对码仍需从手机上看
+#   adb connect "$(pair_ip -c)"      # 连接（配对成功后用连接端口）
+#   scrcpy --tcpip                   # 或直接让 scrcpy 自己切到无线
+#
+# 选项:
+#   -c, --connect     取连接服务 _adb-tls-connect._tcp 的地址（而不是配对地址）
+#   -a, --all         打印所有发现的地址（配对在前）
+#   -w, --wait N      最多等待 N 秒直到目标服务出现（默认 0，即只查一次）
+#   -d, --debug       把 adb 原始输出打到 stderr，便于排查
+#   -h, --help        帮助
+#
+# 环境变量:
+#   ADB               指定 adb 可执行文件（默认取 PATH 里的 adb）
+#
+# 注意: 配对服务只在手机「无线调试 → 使用配对码配对设备」对话框打开期间广播，
+#       对话框一关 _adb-tls-pairing._tcp 就消失；连接服务在无线调试开启期间一直在。
+#       配对码无法自动获取（随机、只显示在手机上），仍需手输一次。
+
+set -u
+
+ADB="${ADB:-adb}"
+MODE=pair
+WAIT=0
+DEBUG=0
+RE='([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}'
+PAIR_SVC='_adb-tls-pairing._tcp'
+CONN_SVC='_adb-tls-connect._tcp'
+
+usage() {
+  # 打印开头连续的注释块（跳过 shebang），遇到第一行非注释即停，不依赖行号
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c|--connect) MODE=connect ;;
+    -a|--all)     MODE=all ;;
+    -w|--wait)    WAIT="${2:-0}"; shift ;;
+    -d|--debug)   DEBUG=1 ;;
+    -h|--help)    usage; exit 0 ;;
+    *) echo "pair_ip: 未知参数 '$1'（-h 看用法）" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+case "$WAIT" in ''|*[!0-9]*) echo "pair_ip: -w 需要一个秒数" >&2; exit 2 ;; esac
+
+if ! command -v "$ADB" >/dev/null 2>&1 && [ ! -x "$ADB" ]; then
+  echo "pair_ip: 找不到 adb（可用 ADB=/path/to/adb 指定）" >&2
+  exit 127
+fi
+
+grab() {
+  printf '%s\n' "$raw" | grep -F -- "$1" | grep -oE "$RE"
+}
+
+deadline=$(( $(date +%s) + WAIT ))
+hinted_wait=0
+
+while :; do
+  raw="$("$ADB" mdns services 2>&1 | tr -d '\r')"
+  [ "$DEBUG" = 1 ] && printf '%s\n' "$raw" >&2
+
+  pair_addrs="$(grab "$PAIR_SVC")"
+  conn_addrs="$(grab "$CONN_SVC")"
+
+  case "$MODE" in
+    pair)
+      if [ -n "$pair_addrs" ]; then
+        n=$(printf '%s\n' "$pair_addrs" | wc -l)
+        [ "$n" -gt 1 ] && echo "pair_ip: 发现 $n 个配对地址，取第一个（-a 看全部）" >&2
+        printf '%s\n' "$pair_addrs" | head -1
+        exit 0
+      fi
+      ;;
+    connect)
+      if [ -n "$conn_addrs" ]; then
+        n=$(printf '%s\n' "$conn_addrs" | wc -l)
+        [ "$n" -gt 1 ] && echo "pair_ip: 发现 $n 个连接地址，取第一个（-a 看全部）" >&2
+        printf '%s\n' "$conn_addrs" | head -1
+        exit 0
+      fi
+      ;;
+    all)
+      if [ -n "$pair_addrs" ] || [ -n "$conn_addrs" ]; then
+        [ -n "$pair_addrs" ] && printf '%s\n' "$pair_addrs"
+        [ -n "$conn_addrs" ] && printf '%s\n' "$conn_addrs"
+        exit 0
+      fi
+      ;;
+  esac
+
+  if [ "$(date +%s)" -lt "$deadline" ]; then
+    if [ "$hinted_wait" = 0 ]; then
+      echo "pair_ip: 目标服务尚未广播，等待中（最长 ${WAIT}s）…" >&2
+      hinted_wait=1
+    fi
+    sleep 1
+    continue
+  fi
+
+  if printf '%s\n' "$raw" | grep -qF "$PAIR_SVC"; then
+    echo "pair_ip: 看到了配对服务，但没解析出 IPv4 地址（可能是 IPv6/链路本地），用 -d 看原始输出" >&2
+  elif printf '%s\n' "$raw" | grep -qF "$CONN_SVC"; then
+    echo "pair_ip: 只看到连接服务 $CONN_SVC，说明手机无线调试是开着的。" >&2
+    echo "         但配对服务只在手机上打开『使用配对码配对设备』对话框时才广播。" >&2
+  else
+    echo "pair_ip: 没有发现任何 adb mDNS 服务。逐条排查：" >&2
+    echo "         1. 手机已开【无线调试】(Android 11+)；配对时要先点开『使用配对码配对设备』对话框" >&2
+    echo "         2. 手机与电脑在同一网段，且路由器没开 AP 隔离 / 访客网络隔离" >&2
+    echo "         3. 电脑上别同时跑 avahi-daemon（会和 adb 抢 5353）：systemctl status avahi-daemon" >&2
+    echo "         4. 用 '$ADB mdns check' 确认 mDNS 后端可用" >&2
+  fi
+  exit 1
+done

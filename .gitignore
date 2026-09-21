@@ -1,0 +1,9 @@
+# 构建中间产物与下载的依赖（不入库）
+/payload/
+/.build/
+/dist/
+/.gocache/
+
+# 常见临时文件
+*.part
+*.tmp
