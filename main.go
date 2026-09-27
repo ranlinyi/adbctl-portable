@@ -32,8 +32,9 @@ const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=12M --max-size=12
 const scrcpyVersion = "4.1"
 
 const (
-	connSvc = "_adb-tls-connect._tcp"
-	pairSvc = "_adb-tls-pairing._tcp"
+	connSvc   = "_adb-tls-connect._tcp"
+	legacySvc = "_adb._tcp"
+	pairSvc   = "_adb-tls-pairing._tcp"
 )
 
 var ipPortRe = regexp.MustCompile("([0-9]{1,3}\\.){3}[0-9]{1,3}:[0-9]{1,5}")
@@ -53,6 +54,11 @@ var usageText = strings.Join([]string{
 	"  adbctl -l            # 只列出无线候选地址，不做任何连接（无线专用）",
 	"  adbctl -w 30         # 最多等 30 秒等 mDNS 广播出现（默认 0 = 只查一次）",
 	"  adbctl -h            # 帮助",
+	"",
+	"免手动重连（断网外出场景）:",
+	"  在能连上的时候执行一次  adb tcpip 5555；之后手机离开 Wi-Fi 几小时再回来，",
+	"  adbctl 也能通过 adb 的 _adb._tcp 广播自动发现并连上固定端口 5555",
+	"  （无线调试会在断网时被系统关掉，固定端口不会）。",
 	"  adbctl --version     # 版本",
 	"  adbctl --print-paths # 打印最终使用的 adb / scrcpy / server 路径",
 	"  adbctl --check-deps  # 扫描依赖是否存在（省空间版；只扫描不下载，别名 --scan）",
@@ -79,6 +85,7 @@ var usageText = strings.Join([]string{
 	"  ADB                    指定 adb（默认用内嵌/系统的 adb）",
 	"  SCRCPY                 指定 scrcpy（默认用内嵌/系统的 scrcpy）",
 	"  PAIR_IP                指定取配对地址的命令（默认自己解析 mDNS）",
+	"  WIFI_ADDR              固定地址 IP:PORT（如 192.168.0.2:5555），作为额外候选",
 	"  SCRCPY_ARGS            覆盖 -S 时的 scrcpy 启动参数（默认见下）",
 	"  ADBCTL_CACHE           依赖释放 / 部署目录（默认用户缓存目录）",
 	"  ADBCTL_SCRCPY_URL      省空间版：scrcpy 包下载地址（可换镜像/本地文件）",
@@ -243,7 +250,8 @@ func run() int {
 			time.Sleep(time.Second)
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "adbctl: 没有发现 %s 广播。检查：\n", connSvc)
+		fmt.Fprintf(os.Stderr, "adbctl: 没有发现任何设备广播（%s / %s）。检查：\n", connSvc, legacySvc)
+		fmt.Fprintln(os.Stderr, "         4. 免手动重连：先在能连上时执行一次 adb tcpip 5555")
 		fmt.Fprintln(os.Stderr, "         1. 手机【无线调试】已开启（Android 11+）")
 		fmt.Fprintln(os.Stderr, "         2. 与电脑同一网段，路由器没开 AP 隔离 / 访客网络隔离")
 		fmt.Fprintln(os.Stderr, "         3. 电脑上别跑 avahi-daemon（会和 adb 抢 5353）")
@@ -578,7 +586,13 @@ func extractAddrs(raw, service string) []string {
 }
 
 func connectCandidates() []string {
-	return dedupe(extractAddrs(mdnsRaw(), connSvc))
+	raw := mdnsRaw()
+	// 无线调试广播（TLS）与 adb tcpip 固定端口模式广播的 _adb._tcp 都要
+	cands := append(extractAddrs(raw, connSvc), extractAddrs(raw, legacySvc)...)
+	if a := os.Getenv("WIFI_ADDR"); a != "" {
+		cands = append(cands, a)
+	}
+	return dedupe(cands)
 }
 
 func dedupe(in []string) []string {
