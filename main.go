@@ -24,9 +24,13 @@ import (
 	"time"
 )
 
-const appVersion = "1.1.2"
+const appVersion = "1.1.3"
 
 const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=20M --max-size=1600 --max-fps=60 --video-buffer=0"
+
+// USB 专用高画质档：USB2.0 实测 adb 吞吐约 106 Mbps，码率取 50M 约留一半余量；
+// --max-size=3200 对 1440x3200 源屏等于原生分辨率。
+const scrcpyArgsUsbDefault = "--video-codec=h265 --video-bit-rate=50M --max-size=3200 --max-fps=60 --video-buffer=0"
 
 // 省空间部署版按需下载的 scrcpy 版本（与 build.sh 保持一致）
 const scrcpyVersion = "4.1"
@@ -86,13 +90,15 @@ var usageText = strings.Join([]string{
 	"  SCRCPY                 指定 scrcpy（默认用内嵌/系统的 scrcpy）",
 	"  PAIR_IP                指定取配对地址的命令（默认自己解析 mDNS）",
 	"  WIFI_ADDR              固定地址 IP:PORT（如 192.168.0.2:5555），作为额外候选",
-	"  SCRCPY_ARGS            覆盖 -S 时的 scrcpy 启动参数（默认见下）",
+	"  SCRCPY_ARGS            覆盖 -S 时的 scrcpy 启动参数（优先级最高）",
+	"  SCRCPY_ARGS_USB        只覆盖 USB（插线）时的参数（默认见下）",
 	"  ADBCTL_CACHE           依赖释放 / 部署目录（默认用户缓存目录）",
 	"  ADBCTL_SCRCPY_URL      省空间版：scrcpy 包下载地址（可换镜像/本地文件）",
 	"  ADBCTL_SCRCPY_SUMS_URL 省空间版：SHA256 清单地址",
 	"",
-	"scrcpy 默认档（2026-09-21 实测；2026-09-27 调整默认档，源屏 1440x3200 / 60Hz）:",
-	"  " + scrcpyArgsDefault,
+	"scrcpy 参数档（2026-09-27 调整）:",
+	"  无线：" + scrcpyArgsDefault,
+	"  USB ：" + scrcpyArgsUsbDefault + "   （插线时自动启用）",
 	"  VBR 内容自适应；音频默认转发到电脑（不想要声音加 --no-audio）",
 	"",
 	"应用名模糊匹配打分:",
@@ -228,7 +234,7 @@ func run() int {
 		if usb != "" {
 			fmt.Fprintf(os.Stderr, "adbctl: 检测到 USB 设备，走有线：%s\n", usb)
 			fmt.Println(usb)
-			return launchOrExit(usb, doScrcpy, doListApps, app)
+			return launchOrExit(usb, "usb", doScrcpy, doListApps, app)
 		}
 		if route == "usb" {
 			fmt.Fprintln(os.Stderr, "adbctl: -U 指定走 USB，但当前没有在位的 USB 设备。")
@@ -305,7 +311,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "         如果刚开关过无线调试，等几秒再试；必要时在手机上重新配对。")
 		return 1
 	}
-	return launchOrExit(ok, doScrcpy, doListApps, app)
+	return launchOrExit(ok, "wifi", doScrcpy, doListApps, app)
 }
 
 // takeValue 取出当前选项的值；没有下一个参数时返回空串（与原脚本行为一致）。
@@ -835,7 +841,7 @@ func readLine() string {
 
 // ---------------- 启动 ----------------
 
-func launchOrExit(target string, doScrcpy, doListApps bool, app string) int {
+func launchOrExit(target, transport string, doScrcpy, doListApps bool, app string) int {
 	if doListApps {
 		return runAttached(scrcpyPath, []string{"-s", target, "--list-apps"})
 	}
@@ -854,7 +860,7 @@ func launchOrExit(target string, doScrcpy, doListApps bool, app string) int {
 			return rc
 		}
 		fmt.Fprintf(os.Stderr, "adbctl: 应用已解析 -> %s\n", pkg)
-		if !strings.Contains(" "+scrcpyArgsValue()+" ", " --new-display") {
+		if !strings.Contains(" "+scrcpyArgsValue(transport)+" ", " --new-display") {
 			appargs = append(appargs, "--new-display")
 		}
 		if stop {
@@ -866,16 +872,22 @@ func launchOrExit(target string, doScrcpy, doListApps bool, app string) int {
 	}
 	if doScrcpy {
 		args := append([]string{"-s", target}, appargs...)
-		args = append(args, strings.Fields(scrcpyArgsValue())...)
+		args = append(args, strings.Fields(scrcpyArgsValue(transport))...)
 		fmt.Fprintf(os.Stderr, "adbctl: 启动 scrcpy -s %s %s\n", target, strings.Join(args[2:], " "))
 		return runAttached(scrcpyPath, args)
 	}
 	return 0
 }
 
-func scrcpyArgsValue() string {
-	if v, ok := os.LookupEnv("SCRCPY_ARGS"); ok {
+func scrcpyArgsValue(transport string) string {
+	if v, ok := os.LookupEnv("SCRCPY_ARGS"); ok && v != "" {
 		return v
+	}
+	if transport == "usb" {
+		if v, ok := os.LookupEnv("SCRCPY_ARGS_USB"); ok && v != "" {
+			return v
+		}
+		return scrcpyArgsUsbDefault
 	}
 	return scrcpyArgsDefault
 }
