@@ -24,9 +24,9 @@ import (
 	"time"
 )
 
-const appVersion = "1.1.1"
+const appVersion = "1.1.2"
 
-const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=20M --max-size=1600 --max-fps=60 --video-buffer=60"
+const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=20M --max-size=1600 --max-fps=60 --video-buffer=0"
 
 // 省空间部署版按需下载的 scrcpy 版本（与 build.sh 保持一致）
 const scrcpyVersion = "4.1"
