@@ -7,6 +7,7 @@
 #   adbctl -a 计算器 -S                # 模糊匹配：唯一命中直接用；多个则按匹配度列出序号让你选
 #   adbctl -a +微信 -S                 # 前缀 + = 启动前先强杀该应用；? 前缀=模糊（本脚本默认就是模糊）
 #   adbctl --list-apps                 # 列出设备上全部应用（应用名 + 包名）
+#   adbctl -A            # 纯音频模式：只把手机的声音转到电脑（手机自动静音），音频低延迟/高音质；隐含 -S
 #   adbctl -U            # 强制走 USB；当前没有在位 USB 设备则报错退出
 #   adbctl -W            # 强制走无线（忽略在位的 USB）
 #   adbctl -p 748966     # 无线配对（748966 = 手机上显示的 6 位配对码）；隐含 -W
@@ -42,6 +43,7 @@
 #                配合 adb tcpip 5555 可做到"手机离线几小时后回来也不用碰手机"
 #   SCRCPY_ARGS      覆盖 -S 时的 scrcpy 启动参数（优先级最高，无线/USB 都生效）
 #   SCRCPY_ARGS_USB  只覆盖 USB（插线）时的参数（默认见下方 SCRCPY_ARGS_USB_DEFAULT）
+#   SCRCPY_ARGS_AUDIO  只覆盖 -A 纯音频模式时的参数（默认见下方 SCRCPY_ARGS_AUDIO_DEFAULT）
 #
 # scrcpy 档位参考（2026-09-21 实测；2026-09-27 调整默认档，源屏 1440x3200 / 60Hz）:
 #   默认档（本文件已设为默认）：VBR 上限 20M + 1600 长边 + 60fps + 缓冲 0（低延迟）+ 音频转发到电脑
@@ -54,6 +56,11 @@
 #      依据：USB2.0 实测 adb 吞吐约 106 Mbps（连续流 13.3 MB/s），50M 约留一半余量
 #      想更狠：SCRCPY_ARGS_USB="--video-codec=h265 --video-bit-rate=80M --max-size=3200 --max-fps=60 --video-buffer=0" adbctl -S
 #      若发烫/掉帧：把 --max-size 降到 2400，或 --video-bit-rate 降到 32M
+#   音频档（-A 纯音频模式，2026-09-27 新增）：
+#      预设：--no-video --no-control --audio-source=output --audio-codec=opus --audio-bit-rate=192K --audio-buffer=20 --require-audio
+#      audio-source=output 关键点：它转发整个音频输出并【关闭设备播放】，所以只有电脑出声
+#      192K 是把默认 128K 提上来的；buffer 20 是把默认 50ms 降下来的（若偶有爆音，往上加到 30~50）
+#      想无损：SCRCPY_ARGS_AUDIO="--no-video --no-control --audio-codec=flac --audio-buffer=30 --require-audio" adbctl -A
 #      VBR 内容自适应：静态界面降到零点几 Mbps，动起来才吃带宽，日常最省
 #      音频：scrcpy 默认就转发设备音频（实测 opus 48kHz 立体声），参数里已不再禁用；
 #            不想要声音加 --no-audio；只想转发但不在电脑出声加 --no-audio-playback
@@ -83,15 +90,25 @@ SCRCPY_ARGS_DEFAULT="--video-codec=h265 --video-bit-rate=20M --max-size=1600 --m
 # USB 专用高画质档：USB2.0 实测 adb 吞吐约 106 Mbps，故码率取 50M（约留一半余量）；
 # --max-size=3200 对 1440x3200 的源屏等于不缩放（原生分辨率）
 SCRCPY_ARGS_USB_DEFAULT="--video-codec=h265 --video-bit-rate=50M --max-size=3200 --max-fps=60 --video-buffer=0"
+# 纯音频档（-A）：--audio-source=output 会关闭设备播放 → 只有电脑出声；
+# opus + 192K 提音质；--audio-buffer 从默认 50ms 降到 20ms 降延迟
+SCRCPY_ARGS_AUDIO_DEFAULT="--no-video --no-control --audio-source=output --audio-codec=opus --audio-bit-rate=192K --audio-buffer=20 --require-audio"
 SCRCPY_ARGS="${SCRCPY_ARGS:-}"
 SCRCPY_ARGS_USB="${SCRCPY_ARGS_USB:-}"
+SCRCPY_ARGS_AUDIO="${SCRCPY_ARGS_AUDIO:-}"
+AUDIO_ONLY=0
 TRANSPORT=wifi
 
-# 选 scrcpy 参数：显式 SCRCPY_ARGS 最优先；否则按传输方式取默认
+# 选 scrcpy 参数：显式 SCRCPY_ARGS 最优先；-A 用音频档；否则按传输方式取默认
+#   音频 -> SCRCPY_ARGS_AUDIO（用户覆盖）或 SCRCPY_ARGS_AUDIO_DEFAULT
 #   USB  -> SCRCPY_ARGS_USB（用户覆盖）或 SCRCPY_ARGS_USB_DEFAULT
 #   无线 -> SCRCPY_ARGS_DEFAULT
 pick_scrcpy_args() {
   if [ -n "$SCRCPY_ARGS" ]; then printf '%s' "$SCRCPY_ARGS"; return; fi
+  if [ "$AUDIO_ONLY" = 1 ]; then
+    if [ -n "$SCRCPY_ARGS_AUDIO" ]; then printf '%s' "$SCRCPY_ARGS_AUDIO"; else printf '%s' "$SCRCPY_ARGS_AUDIO_DEFAULT"; fi
+    return
+  fi
   if [ "$1" = usb ]; then
     if [ -n "$SCRCPY_ARGS_USB" ]; then printf '%s' "$SCRCPY_ARGS_USB"; else printf '%s' "$SCRCPY_ARGS_USB_DEFAULT"; fi
   else
@@ -123,6 +140,7 @@ while [ $# -gt 0 ]; do
     -S|--scrcpy) DO_SCRCPY=1 ;;
     -a|--app)    APP="${2:-}"; DO_SCRCPY=1; shift ;;
     --list-apps) DO_LIST_APPS=1; DO_SCRCPY=1 ;;
+    -A|--audio-only) AUDIO_ONLY=1; DO_SCRCPY=1 ;;
     -U|--usb)    ROUTE=usb ;;
     -W|--wifi)   ROUTE=wifi ;;
     -l|--list)   DO_LIST=1; ROUTE=wifi ;;

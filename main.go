@@ -24,13 +24,16 @@ import (
 	"time"
 )
 
-const appVersion = "1.1.3"
+const appVersion = "1.1.4"
 
 const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=20M --max-size=1600 --max-fps=60 --video-buffer=0"
 
 // USB 专用高画质档：USB2.0 实测 adb 吞吐约 106 Mbps，码率取 50M 约留一半余量；
 // --max-size=3200 对 1440x3200 源屏等于原生分辨率。
 const scrcpyArgsUsbDefault = "--video-codec=h265 --video-bit-rate=50M --max-size=3200 --max-fps=60 --video-buffer=0"
+
+// 纯音频档（-A）：audio-source=output 会关闭设备播放，只有电脑出声。
+const scrcpyArgsAudioDefault = "--no-video --no-control --audio-source=output --audio-codec=opus --audio-bit-rate=192K --audio-buffer=20 --require-audio"
 
 // 省空间部署版按需下载的 scrcpy 版本（与 build.sh 保持一致）
 const scrcpyVersion = "4.1"
@@ -52,6 +55,7 @@ var usageText = strings.Join([]string{
 	"  adbctl -a 计算器 -S                # 模糊匹配：唯一命中直接用；多个则按匹配度列出序号让你选",
 	"  adbctl -a +微信 -S                 # 前缀 + = 启动前先强杀该应用；? 前缀=模糊（本程序默认就是模糊）",
 	"  adbctl --list-apps                 # 列出设备上全部应用（应用名 + 包名）",
+	"  adbctl -A            # 纯音频模式：只把手机声音转到电脑（手机自动静音）；隐含 -S",
 	"  adbctl -U            # 强制走 USB；当前没有在位 USB 设备则报错退出",
 	"  adbctl -W            # 强制走无线（忽略在位的 USB）",
 	"  adbctl -p 748966     # 无线配对（748966 = 手机上显示的 6 位配对码）；隐含 -W",
@@ -92,6 +96,7 @@ var usageText = strings.Join([]string{
 	"  WIFI_ADDR              固定地址 IP:PORT（如 192.168.0.2:5555），作为额外候选",
 	"  SCRCPY_ARGS            覆盖 -S 时的 scrcpy 启动参数（优先级最高）",
 	"  SCRCPY_ARGS_USB        只覆盖 USB（插线）时的参数（默认见下）",
+	"  SCRCPY_ARGS_AUDIO      只覆盖 -A 纯音频模式时的参数",
 	"  ADBCTL_CACHE           依赖释放 / 部署目录（默认用户缓存目录）",
 	"  ADBCTL_SCRCPY_URL      省空间版：scrcpy 包下载地址（可换镜像/本地文件）",
 	"  ADBCTL_SCRCPY_SUMS_URL 省空间版：SHA256 清单地址",
@@ -99,6 +104,7 @@ var usageText = strings.Join([]string{
 	"scrcpy 参数档（2026-09-27 调整）:",
 	"  无线：" + scrcpyArgsDefault,
 	"  USB ：" + scrcpyArgsUsbDefault + "   （插线时自动启用）",
+	"  音频：" + scrcpyArgsAudioDefault + "   （-A 纯音频模式）",
 	"  VBR 内容自适应；音频默认转发到电脑（不想要声音加 --no-audio）",
 	"",
 	"应用名模糊匹配打分:",
@@ -139,6 +145,7 @@ func main() {
 func run() int {
 	route := "auto"
 	doScrcpy := false
+	audioOnly := false
 	doList := false
 	doListApps := false
 	pairCode := ""
@@ -155,6 +162,9 @@ func run() int {
 			doScrcpy = true
 		case "--list-apps":
 			doListApps = true
+			doScrcpy = true
+		case "-A", "--audio-only":
+			audioOnly = true
 			doScrcpy = true
 		case "-U", "--usb":
 			route = "usb"
@@ -234,7 +244,7 @@ func run() int {
 		if usb != "" {
 			fmt.Fprintf(os.Stderr, "adbctl: 检测到 USB 设备，走有线：%s\n", usb)
 			fmt.Println(usb)
-			return launchOrExit(usb, "usb", doScrcpy, doListApps, app)
+			return launchOrExit(usb, "usb", audioOnly, doScrcpy, doListApps, app)
 		}
 		if route == "usb" {
 			fmt.Fprintln(os.Stderr, "adbctl: -U 指定走 USB，但当前没有在位的 USB 设备。")
@@ -311,7 +321,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "         如果刚开关过无线调试，等几秒再试；必要时在手机上重新配对。")
 		return 1
 	}
-	return launchOrExit(ok, "wifi", doScrcpy, doListApps, app)
+	return launchOrExit(ok, "wifi", audioOnly, doScrcpy, doListApps, app)
 }
 
 // takeValue 取出当前选项的值；没有下一个参数时返回空串（与原脚本行为一致）。
@@ -841,7 +851,7 @@ func readLine() string {
 
 // ---------------- 启动 ----------------
 
-func launchOrExit(target, transport string, doScrcpy, doListApps bool, app string) int {
+func launchOrExit(target, transport string, audioOnly, doScrcpy, doListApps bool, app string) int {
 	if doListApps {
 		return runAttached(scrcpyPath, []string{"-s", target, "--list-apps"})
 	}
@@ -860,7 +870,7 @@ func launchOrExit(target, transport string, doScrcpy, doListApps bool, app strin
 			return rc
 		}
 		fmt.Fprintf(os.Stderr, "adbctl: 应用已解析 -> %s\n", pkg)
-		if !strings.Contains(" "+scrcpyArgsValue(transport)+" ", " --new-display") {
+		if !strings.Contains(" "+scrcpyArgsValue(transport, audioOnly)+" ", " --new-display") {
 			appargs = append(appargs, "--new-display")
 		}
 		if stop {
@@ -872,16 +882,22 @@ func launchOrExit(target, transport string, doScrcpy, doListApps bool, app strin
 	}
 	if doScrcpy {
 		args := append([]string{"-s", target}, appargs...)
-		args = append(args, strings.Fields(scrcpyArgsValue(transport))...)
+		args = append(args, strings.Fields(scrcpyArgsValue(transport, audioOnly))...)
 		fmt.Fprintf(os.Stderr, "adbctl: 启动 scrcpy -s %s %s\n", target, strings.Join(args[2:], " "))
 		return runAttached(scrcpyPath, args)
 	}
 	return 0
 }
 
-func scrcpyArgsValue(transport string) string {
+func scrcpyArgsValue(transport string, audioOnly bool) string {
 	if v, ok := os.LookupEnv("SCRCPY_ARGS"); ok && v != "" {
 		return v
+	}
+	if audioOnly {
+		if v, ok := os.LookupEnv("SCRCPY_ARGS_AUDIO"); ok && v != "" {
+			return v
+		}
+		return scrcpyArgsAudioDefault
 	}
 	if transport == "usb" {
 		if v, ok := os.LookupEnv("SCRCPY_ARGS_USB"); ok && v != "" {
