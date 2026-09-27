@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-const appVersion = "1.1.4"
+const appVersion = "1.1.5"
 
 const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=20M --max-size=1600 --max-fps=60 --video-buffer=0"
 
@@ -33,7 +33,8 @@ const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=20M --max-size=16
 const scrcpyArgsUsbDefault = "--video-codec=h265 --video-bit-rate=50M --max-size=3200 --max-fps=60 --video-buffer=0"
 
 // 纯音频档（-A）：audio-source=output 会关闭设备播放，只有电脑出声。
-const scrcpyArgsAudioDefault = "--no-video --no-control --audio-source=output --audio-codec=opus --audio-bit-rate=192K --audio-buffer=20 --require-audio"
+// 用 raw（未压缩 PCM）：bit-perfect 且无编码器帧缓冲（opus 20ms/帧、FLAC 85ms/帧），延迟最低。
+const scrcpyArgsAudioDefault = "--no-video --no-control --audio-source=output --audio-codec=raw --audio-buffer=20 --require-audio"
 
 // 省空间部署版按需下载的 scrcpy 版本（与 build.sh 保持一致）
 const scrcpyVersion = "4.1"

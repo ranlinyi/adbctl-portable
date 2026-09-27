@@ -56,11 +56,13 @@
 #      依据：USB2.0 实测 adb 吞吐约 106 Mbps（连续流 13.3 MB/s），50M 约留一半余量
 #      想更狠：SCRCPY_ARGS_USB="--video-codec=h265 --video-bit-rate=80M --max-size=3200 --max-fps=60 --video-buffer=0" adbctl -S
 #      若发烫/掉帧：把 --max-size 降到 2400，或 --video-bit-rate 降到 32M
-#   音频档（-A 纯音频模式，2026-09-27 新增）：
-#      预设：--no-video --no-control --audio-source=output --audio-codec=opus --audio-bit-rate=192K --audio-buffer=20 --require-audio
-#      audio-source=output 关键点：它转发整个音频输出并【关闭设备播放】，所以只有电脑出声
-#      192K 是把默认 128K 提上来的；buffer 20 是把默认 50ms 降下来的（若偶有爆音，往上加到 30~50）
-#      想无损：SCRCPY_ARGS_AUDIO="--no-video --no-control --audio-codec=flac --audio-buffer=30 --require-audio" adbctl -A
+#   音频档（-A 纯音频模式）：2026-09-27 新增，同日把编解码改为无损 raw
+#      预设：--no-video --no-control --audio-source=output --audio-codec=raw --audio-buffer=20 --require-audio
+#      audio-source=output 关键点：转发整个音频输出并【关闭设备播放】→ 只有电脑出声
+#      为什么是 raw：实测帧长 opus=20ms/帧、FLAC=85.3ms/帧（FLAC 块=4096 采样），
+#        FLAC 那 85ms 编码块缓冲会明显加延迟；raw 无编码器 → bit-perfect 且零编码延迟，带宽 1.536 Mbps（相对线路可忽略）
+#      buffer 20 是把 scrcpy 默认 50ms 降下来的（若偶有爆音，往上加到 30~50）
+#      想省带宽：SCRCPY_ARGS_AUDIO="--no-video --no-control --audio-source=output --audio-codec=opus --audio-bit-rate=320K --audio-buffer=20 --require-audio" adbctl -A
 #      VBR 内容自适应：静态界面降到零点几 Mbps，动起来才吃带宽，日常最省
 #      音频：scrcpy 默认就转发设备音频（实测 opus 48kHz 立体声），参数里已不再禁用；
 #            不想要声音加 --no-audio；只想转发但不在电脑出声加 --no-audio-playback
@@ -91,8 +93,9 @@ SCRCPY_ARGS_DEFAULT="--video-codec=h265 --video-bit-rate=20M --max-size=1600 --m
 # --max-size=3200 对 1440x3200 的源屏等于不缩放（原生分辨率）
 SCRCPY_ARGS_USB_DEFAULT="--video-codec=h265 --video-bit-rate=50M --max-size=3200 --max-fps=60 --video-buffer=0"
 # 纯音频档（-A）：--audio-source=output 会关闭设备播放 → 只有电脑出声；
-# opus + 192K 提音质；--audio-buffer 从默认 50ms 降到 20ms 降延迟
-SCRCPY_ARGS_AUDIO_DEFAULT="--no-video --no-control --audio-source=output --audio-codec=opus --audio-bit-rate=192K --audio-buffer=20 --require-audio"
+# 编解码用 raw（未压缩 PCM）：bit-perfect，且没有编码器帧缓冲 → 延迟最低
+# --audio-buffer 从 scrcpy 默认 50ms 降到 20ms
+SCRCPY_ARGS_AUDIO_DEFAULT="--no-video --no-control --audio-source=output --audio-codec=raw --audio-buffer=20 --require-audio"
 SCRCPY_ARGS="${SCRCPY_ARGS:-}"
 SCRCPY_ARGS_USB="${SCRCPY_ARGS_USB:-}"
 SCRCPY_ARGS_AUDIO="${SCRCPY_ARGS_AUDIO:-}"
