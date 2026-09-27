@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-const appVersion = "1.0.0"
+const appVersion = "1.1.0"
 
 const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=12M --max-size=1200 --max-fps=52 --video-buffer=0"
 
