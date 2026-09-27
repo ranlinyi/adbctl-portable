@@ -9,7 +9,7 @@
 # 依赖：go(1.22+)、curl、tar、unzip、sha256sum
 set -euo pipefail
 
-VERSION="1.1.5"
+VERSION="1.1.6"
 SCRCPY_VERSION="4.1"
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"

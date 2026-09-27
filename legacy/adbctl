@@ -164,13 +164,21 @@ fi
 
 mdns_raw() { "$ADB" mdns services 2>&1 | tr -d '\r'; }
 
+# 候选顺序：已连上的 > WIFI_ADDR > 无线调试(TLS) > 固定端口(_adb._tcp)。
+# 已连上的排最前，避免对手机残留的陈旧 mDNS 广播（MIUI 的 mdnsd 有时不撤回旧服务）做无谓 connect。
 connect_candidates() {
-  local raw
+  local raw connected
   raw="$(mdns_raw)"
+  connected="$("$ADB" devices 2>/dev/null | awk '$2 == "device" { print $1 }' | grep -E "$RE" || true)"
   {
+    if [ -n "$connected" ]; then
+      printf '%s\n' "$connected" | while IFS= read -r a; do
+        printf '%s\n' "$raw" | grep -Fq -- "$a" && printf '%s\n' "$a"
+      done
+    fi
+    if [ -n "$WIFI_ADDR" ]; then printf '%s\n' "$WIFI_ADDR"; fi
     printf '%s\n' "$raw" | grep -F -- "$CONN_SVC" | grep -oE "$RE"
     printf '%s\n' "$raw" | grep -F -- "$LEGACY_SVC" | grep -oE "$RE"
-    if [ -n "$WIFI_ADDR" ]; then printf '%s\n' "$WIFI_ADDR"; fi
   } | awk '!seen[$0]++'
 }
 

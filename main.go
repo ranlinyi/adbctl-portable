@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-const appVersion = "1.1.5"
+const appVersion = "1.1.6"
 
 const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=20M --max-size=1600 --max-fps=60 --video-buffer=0"
 
@@ -602,14 +602,35 @@ func extractAddrs(raw, service string) []string {
 	return out
 }
 
+// 候选顺序：已连上的 > WIFI_ADDR > 无线调试(TLS) > 固定端口(_adb._tcp)。
+// 已连上的排最前，避免对残留的陈旧 mDNS 广播做无谓 connect。
 func connectCandidates() []string {
 	raw := mdnsRaw()
-	// 无线调试广播（TLS）与 adb tcpip 固定端口模式广播的 _adb._tcp 都要
-	cands := append(extractAddrs(raw, connSvc), extractAddrs(raw, legacySvc)...)
+	var cands []string
+	for _, a := range connectedAddrs() {
+		if strings.Contains(raw, a) {
+			cands = append(cands, a)
+		}
+	}
 	if a := os.Getenv("WIFI_ADDR"); a != "" {
 		cands = append(cands, a)
 	}
+	cands = append(cands, extractAddrs(raw, connSvc)...)
+	cands = append(cands, extractAddrs(raw, legacySvc)...)
 	return dedupe(cands)
+}
+
+// connectedAddrs 返回 adb devices 中已处于 device 状态的 IP:端口 地址。
+func connectedAddrs() []string {
+	out, _ := adbCaptureOut("devices")
+	var addrs []string
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(strings.TrimRight(line, "\r"))
+		if len(f) >= 2 && f[1] == "device" && ipPortRe.MatchString(f[0]) {
+			addrs = append(addrs, f[0])
+		}
+	}
+	return addrs
 }
 
 func dedupe(in []string) []string {

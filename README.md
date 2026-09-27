@@ -14,6 +14,25 @@
 
 ---
 
+## 特色功能
+
+- **一键自动选路**：有 USB 走 USB（快、稳、延迟低），没有才回落无线，无需手动指定。
+- **无线免手动重连**：配合 `adb tcpip 5555` 固定端口，adbctl 会识别手机广播的 `_adb._tcp`
+  服务自动发现并连接——**手机离开 Wi-Fi 几小时再回来，也不用碰手机**。
+  （Android 14+ 在断网时会自动关掉“无线调试”开关且不会恢复，而固定端口不受影响。）
+- **按传输自动切画质档**：USB 用 **原生 1440×3200 + 50 Mbps**，无线用 **1600 长边 + 20 Mbps**，
+  两者都是 **60fps + 零视频缓冲**（低延迟）；可分别用 `SCRCPY_ARGS_USB` / `SCRCPY_ARGS` 覆盖。
+- **`-A` 纯音频模式**：把手机声音转到电脑，**手机自动静音、只有电脑出声**；
+  默认 **无损 raw（未压缩 PCM，bit-perfect）** + 20ms 缓冲 + `--require-audio` 兜底。
+  实测帧长：opus 20.0ms/帧、FLAC 85.3ms/帧（块=4096 采样）、raw 无编码器——
+  所以“要无损又要低延迟”选 raw（带宽 1536 kbps，相对线路可忽略）。
+- **`-a` 单应用虚拟显示**：只把指定应用投到电脑的新显示里，**手机主屏不受影响**；
+  支持中文应用名模糊匹配（唯一命中直接用，多个并列让你选序号）。
+- **零依赖便携**：单文件内嵌 adb + scrcpy，拷到 U 盘即可运行；另有 6.6 MB 的省空间版按需下载。
+- **干净的输出约定**：stdout 只输出选中的目标，适合 `ADDR=$(adbctl -W)` 这种脚本用法。
+
+---
+
 ## 1. 下载与使用
 
 到本仓库的 **Releases** 页面下载对应文件：
@@ -31,6 +50,7 @@
 ./adbctl-linux-x86_64                 # 自动选路连接，打印选中的序列号或 IP:端口
 ./adbctl-linux-x86_64 -S              # 连上后投屏
 ./adbctl-linux-x86_64 -a 计算器 -S    # 只流转单个应用（虚拟显示，手机主屏不受影响）
+./adbctl-linux-x86_64 -A              # 纯音频：手机静音，只在电脑出声（默认无损 raw）
 ./adbctl-linux-x86_64 -p 123456 -S    # 无线首次配对
 
 # 省空间版用法完全相同，只是文件名不同
@@ -66,7 +86,7 @@ ADDR=$(./adbctl-linux-x86_64 -W)   # 变量拿到的是干净地址
 
 可执行文件本身只有约 6.6 MB，不内嵌任何依赖。每次启动按下面的顺序决定 adb / scrcpy 从哪来：
 
-1. **缓存**：之前已经部署过就直接用，可离线（`\$XDG_CACHE_HOME/adbctl/1.0.0/bin`，通常是 `~/.cache/adbctl/1.0.0/bin`）；
+1. **缓存**：之前已经部署过就直接用，可离线（`\$XDG_CACHE_HOME/adbctl/<版本>/bin`，通常是 `~/.cache/adbctl/<版本>/bin`）；
 2. **系统**：`PATH` 里**同时**有 `adb` 和 `scrcpy` 时直接用系统的，
    **不下载、不占额外空间**；
 3. **按需下载**：缺哪个就下载官方 **scrcpy v4.1** 预编译包（自带 adb + scrcpy + scrcpy-server，
@@ -80,7 +100,7 @@ ADDR=$(./adbctl-linux-x86_64 -W)   # 变量拿到的是干净地址
 
 ```text
 模式：省空间部署版（按需下载，仅 Linux）
-缓存目录：     /home/you/.cache/adbctl/1.0.0
+缓存目录：     /home/you/.cache/adbctl/<版本>
 系统 adb：     /home/you/Android/Sdk/platform-tools/adb
 系统 scrcpy：  /usr/bin/scrcpy
 已部署 adb：   （未找到）
@@ -88,7 +108,7 @@ ADDR=$(./adbctl-linux-x86_64 -W)   # 变量拿到的是干净地址
 结论：系统已有 adb 与 scrcpy，直接使用，无需下载。
 ```
 
-- 部署位置用 `ADBCTL_CACHE` 可以改（默认 `~/.cache/adbctl/1.0.0`）。
+- 部署位置用 `ADBCTL_CACHE` 可以改（默认 `~/.cache/adbctl/<版本>`）。
 - 删掉该目录，下次运行会重新下载部署。
 - 下载默认走官方 GitHub；可用下面的变量换成镜像或本地文件，也遵循标准代理变量
   `HTTPS_PROXY` / `HTTP_PROXY`：
@@ -108,8 +128,8 @@ adb / scrcpy / scrcpy-server 释放到系统缓存目录：
 
 | 平台 | 默认目录 |
 |---|---|
-| Linux | `\$XDG_CACHE_HOME/adbctl/1.0.0`（通常是 `~/.cache/adbctl/1.0.0`） |
-| Windows | `%LOCALAPPDATA%\adbctl\1.0.0` |
+| Linux | `\$XDG_CACHE_HOME/adbctl/<版本>`（通常是 `~/.cache/adbctl/<版本>`） |
+| Windows | `%LOCALAPPDATA%\adbctl\<版本>` |
 
 可用 `ADBCTL_CACHE` 覆盖。删除该目录后下次运行会重新释放。
 
@@ -122,17 +142,22 @@ adb / scrcpy / scrcpy-server 释放到系统缓存目录：
 | `ADB` | 内嵌 / 系统 adb | 指定外部 adb 可执行文件 |
 | `SCRCPY` | 内嵌 / 系统 scrcpy | 指定外部 scrcpy 可执行文件 |
 | `PAIR_IP` | 自己解析 mDNS | 指定取配对地址的命令 |
-| `SCRCPY_ARGS` | 见下 | 整体替换 `-S` 时的 scrcpy 参数 |
+| `WIFI_ADDR` | 无 | 固定地址 `IP:端口`（如 `192.168.0.2:5555`），作为额外候选并优先尝试 |
+| `SCRCPY_ARGS` | 见下 | 整体替换 `-S` 时的 scrcpy 参数（**最高优先级**） |
+| `SCRCPY_ARGS_USB` | 见下 | 只覆盖 USB（插线）时的 scrcpy 参数 |
+| `SCRCPY_ARGS_AUDIO` | 见下 | 只覆盖 `-A` 纯音频模式时的 scrcpy 参数 |
 | `ADBCTL_CACHE` | 系统缓存目录 | 依赖释放 / 部署目录 |
 | `SCRCPY_SERVER_PATH` | 内嵌 / 下载的 server | 指定 scrcpy-server 路径 |
 | `ADBCTL_SCRCPY_URL` | 官方地址 | 省空间版：scrcpy 包下载地址 |
 | `ADBCTL_SCRCPY_SUMS_URL` | 官方地址 | 省空间版：SHA256 清单地址 |
 | `HTTPS_PROXY` / `HTTP_PROXY` | 无 | 下载依赖时使用的代理 |
 
-默认 scrcpy 档（实测于 Redmi K70 / 540x1200 / H.265）：
+默认画质档（按传输方式自动选择，2026-09-27 修订）：
 
-```
---video-codec=h265 --video-bit-rate=12M --max-size=1200 --max-fps=52 --video-buffer=0
+```text
+无线：--video-codec=h265 --video-bit-rate=20M  --max-size=1600 --max-fps=60 --video-buffer=0
+USB ：--video-codec=h265 --video-bit-rate=50M  --max-size=3200 --max-fps=60 --video-buffer=0   （插线自动启用）
+音频：--no-video --no-control --audio-source=output --audio-codec=raw --audio-buffer=20 --require-audio   （-A）
 ```
 
 ---
@@ -222,6 +247,7 @@ CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -tags lite -trimpath -ldflags "
 - 运行时不依赖 bash / awk / sed / grep 等外部命令，逻辑全部在 Go 内实现。
 - `-a` 模糊匹配的分数规则、退出码、stdout/stderr 约定与原脚本保持一致。
 - 多个候选地址现在会**去重**后逐个尝试（原脚本可能重复试同一地址）。
+- 候选顺序优化：**已连上的地址与 `WIFI_ADDR` 排在最前**，避免对手机残留的陈旧 mDNS 广播做无谓连接（安卓 mdnsd 有时不撤回旧服务，会残留一个已失效的端口）。
 - 交互判定用真正的 `isatty`（Linux `ioctl(TCGETS)` / Windows `GetConsoleMode`），
   管道、`/dev/null`、CI 中不会卡住，与原脚本 `[ -t 0 ]` 一致。
 - 新增 `--version`、`--print-paths`、`--check-deps`、`SCRCPY` 环境变量。
