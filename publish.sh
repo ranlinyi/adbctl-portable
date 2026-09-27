@@ -19,8 +19,13 @@ TITLE="${RELEASE_TITLE:-adbctl 1.0.0（自包含单文件便携版）}"
 API="https://api.github.com"
 UPLOADS="https://uploads.github.com"
 
+# 未显式设置时，回退到 ~/.config/adbctl/github_token（0600），便于直接跑 ./publish.sh
+if [ -z "${GITHUB_TOKEN:-}" ] && [ -f "$HOME/.config/adbctl/github_token" ]; then
+  GITHUB_TOKEN="$(tr -d ' \t\r\n' < "$HOME/.config/adbctl/github_token")"
+fi
+
 if [ -z "${GITHUB_TOKEN:-}" ]; then
-  echo "错误：请设置 GITHUB_TOKEN，例如：" >&2
+  echo "错误：请设置 GITHUB_TOKEN，或把令牌写入 ~/.config/adbctl/github_token" >&2
   echo "  GITHUB_TOKEN=ghp_xxx ./publish.sh" >&2
   exit 1
 fi
