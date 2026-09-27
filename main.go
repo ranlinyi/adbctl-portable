@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-const appVersion = "1.1.0"
+const appVersion = "1.1.1"
 
 const scrcpyArgsDefault = "--video-codec=h265 --video-bit-rate=20M --max-size=1600 --max-fps=60 --video-buffer=60"
 
@@ -91,7 +91,7 @@ var usageText = strings.Join([]string{
 	"  ADBCTL_SCRCPY_URL      省空间版：scrcpy 包下载地址（可换镜像/本地文件）",
 	"  ADBCTL_SCRCPY_SUMS_URL 省空间版：SHA256 清单地址",
 	"",
-	"scrcpy 默认档（2026-09-21 实测于 Redmi K70 / 540x1200 / H.265）:",
+	"scrcpy 默认档（2026-09-21 实测；2026-09-27 调整默认档，源屏 1440x3200 / 60Hz）:",
 	"  " + scrcpyArgsDefault,
 	"  VBR 内容自适应；音频默认转发到电脑（不想要声音加 --no-audio）",
 	"",
